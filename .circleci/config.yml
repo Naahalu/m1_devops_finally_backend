@@ -1,0 +1,103 @@
+version: 2
+jobs:
+  install:
+    docker:
+      - image: circleci/python:3.7
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      - restore_cache:
+          keys:
+            - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
+
+      - run: export CONDUIT_SECRET='something-really-secret'
+      - run: export FLASK_APP=/repo/autoapp.py
+      - run: export FLASK_DEBUG=1
+
+      - run:
+          name: install dependencies
+          command: |
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install -r requirements/dev.txt --user
+
+      - save_cache:
+          paths:
+            - ./venv
+          key: dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
+
+  test:
+    docker:
+      - image: circleci/python:3.7
+      - image: circleci/postgres:9.6-alpine
+        environment:
+          POSTGRES_USER: myUsr
+          POSTGRES_DB: psdb
+          POSTGRES_PASSWORD: somePwd
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      - restore_cache:
+          keys:
+            - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
+
+            - dependencies-
+
+      - run: pip install -r requirements/dev.txt --user
+
+      - run:
+          command: flask test
+          environment:
+            DATABASE_URL: postgresql://myUsr:somePwd@localhost:5432/myUsr
+
+  build:
+    docker:
+      - image: circleci/python:3.7
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
+            - dependencies-
+      - run: pip install -r requirements/dev.txt --user
+
+  build_and_push_docker:
+    docker:
+      - image: docker:17.05.0-ce-git
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build and push Docker image
+          command: |
+            docker login -u $DOCKER_LOGIN -p $DOCKER_PWD
+            docker build --cache-from=app -t app:latest .
+            docker tag app $DOCKER_LOGIN/medium-backend:$CIRCLE_BUILD_NUM
+            docker tag app $DOCKER_LOGIN/medium-backend:latest
+            docker push $DOCKER_LOGIN/medium-backend:$CIRCLE_BUILD_NUM
+            docker push $DOCKER_LOGIN/medium-backend:latest
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - install
+      - build:
+          requires:
+            - install
+      - test:
+          requires:
+            - install
+      - build_and_push_docker:
+          requires:
+            - test
+          branches:
+            only:
+              - master
