@@ -2,28 +2,20 @@ version: 2
 jobs:
   install:
     docker:
-      - image: circleci/python:3.7
-
+      - image: circleci/python:3.6.4
     working_directory: ~/repo
-
     steps:
       - checkout
-
       - restore_cache:
           keys:
             - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
-
-      - run: export CONDUIT_SECRET='something-really-secret'
-      - run: export FLASK_APP=/repo/autoapp.py
-      - run: export FLASK_DEBUG=1
-
+            - dependencies-
       - run:
-          name: install dependencies
+          name: Install dependencies
           command: |
             python3 -m venv venv
-            source venv/bin/activate
-            pip install -r requirements/dev.txt --user
-
+            . venv/bin/activate
+            python3 -m pip install -r requirements/dev.txt
       - save_cache:
           paths:
             - ./venv
@@ -31,34 +23,45 @@ jobs:
 
   test:
     docker:
-      - image: circleci/python:3.7
+      - image: circleci/python:3.6.4
       - image: circleci/postgres:9.6-alpine
         environment:
           POSTGRES_USER: myUsr
-          POSTGRES_DB: psdb
+          POSTGRES_DB: postgres
           POSTGRES_PASSWORD: somePwd
-
     working_directory: ~/repo
-
     steps:
       - checkout
-
       - restore_cache:
           keys:
             - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
-
             - dependencies-
-
-      - run: pip install -r requirements/dev.txt --user
-
       - run:
-          command: flask test
+          name: install dockerize
+          command: wget https://github.com/jwilder/dockerize/releases/download/$DOCKERIZE_VERSION/dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && rm dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz
           environment:
-            DATABASE_URL: postgresql://myUsr:somePwd@localhost:5432/myUsr
+            DOCKERIZE_VERSION: v0.3.0
+      - run:
+          name: Wait for db
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Run unit test
+          command: |
+            export CONDUIT_SECRET='something-really-secret'
+            export FLASK_APP=/home/circleci/repo/autoapp.py
+            export FLASK_DEBUG=1
+            export DATABASE_URL=postgresql://myUsr:somePwd@localhost:5432/postgres
+            . venv/bin/activate
+            flask test
 
   build:
     docker:
-      - image: circleci/python:3.7
+      - image: circleci/python:3.6.4
+      - image: circleci/postgres:9.6-alpine
+        environment:
+          POSTGRES_USER: myUsr
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: somePwd
     working_directory: ~/repo
     steps:
       - checkout
@@ -66,7 +69,24 @@ jobs:
           keys:
             - dependencies-{{ checksum "requirements.txt" }}-{{ .Environment.CACHE_VERSION }}
             - dependencies-
-      - run: pip install -r requirements/dev.txt --user
+      - run:
+          name: install dockerize
+          command: wget https://github.com/jwilder/dockerize/releases/download/$DOCKERIZE_VERSION/dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && rm dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz
+          environment:
+            DOCKERIZE_VERSION: v0.3.0
+      - run:
+          name: Wait for db
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
+          name: Migrate Database
+          command: |
+            export CONDUIT_SECRET='something-really-secret'
+            export FLASK_APP=/home/circleci/repo/autoapp.py
+            export FLASK_DEBUG=1
+            export DATABASE_URL=postgresql://myUsr:somePwd@localhost:5432/postgres
+            . venv/bin/activate
+            flask db upgrade
+            flask db migrate
 
   build_and_push_docker:
     docker:
@@ -86,7 +106,7 @@ jobs:
 
 workflows:
   version: 2
-  build_and_test:
+  Build:
     jobs:
       - install
       - build:
@@ -98,3 +118,6 @@ workflows:
       - build_and_push_docker:
           requires:
             - test
+          filters:
+            branches:
+              only: master
